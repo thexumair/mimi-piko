@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mimi Piko Cloud</title>
+<style>
+  :root { --bg:#eaf6ec; --card:#fff; --ink:#1f3b2c; --muted:#5e7a66; --green:#4e9f3d; --pink:#e7859c; --line:#d3e8d6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Arial, sans-serif; background:var(--bg); color:var(--ink); }
+  header { max-width:1000px; margin:0 auto; padding:22px 16px 6px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:28px; }
+  .pill { font-size:14px; padding:6px 12px; border-radius:20px; background:#fff; display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#aaa; }
+  .on .dot { background:var(--green); } .off .dot { background:#c0392b; }
+  main { max-width:1000px; margin:0 auto; padding:10px 16px 30px; display:grid; gap:14px; grid-template-columns: repeat(3, 1fr); }
+  .card { background:var(--card); border-radius:18px; padding:18px; box-shadow:0 4px 14px #0000000d; }
+  .wide { grid-column: span 3; } .two { grid-column: span 2; }
+  .label { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.06em; }
+  .big { font-size:40px; font-weight:800; margin:6px 0; }
+  .face { font-size:54px; line-height:1; }
+  .bar { height:14px; background:#e3efe5; border-radius:8px; overflow:hidden; margin-top:6px; }
+  .fill { height:100%; background:var(--green); width:0; transition: width .4s; }
+  ul { margin:8px 0 0; padding-left:18px; } li { margin:4px 0; }
+  .muted { color:var(--muted); font-size:14px; }
+  .alert { background:#ffe6ec; } .ok { background:#e3f4e1; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .wide, .two { grid-column: span 1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mimi Piko Cloud</h1>
+  <div id="status" class="pill"><span class="dot"></span><span id="statusText">Loading...</span></div>
+</header>
+<main>
+  <div class="card">
+    <div class="label">Mood</div>
+    <div class="face" id="face">...</div>
+    <div id="moodText" class="muted"></div>
+  </div>
+  <div class="card">
+    <div class="label">Soil moisture</div>
+    <div class="big" id="pct">--%</div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="muted" id="raw" style="margin-top:6px"></div>
+  </div>
+  <div class="card" id="alertCard">
+    <div class="label">Thirsty alert</div>
+    <div class="big" id="alertBig" style="font-size:24px">--</div>
+    <div class="muted" id="alertText"></div>
+  </div>
+
+  <div class="card wide">
+    <div class="label">Moisture, last 24 hours</div>
+    <div id="chart" style="height:280px;margin-top:8px"></div>
+    <div class="muted" style="margin-top:6px">Green dots = wet (happy), pink dots = dry (sad)</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Times watered</div>
+    <div class="big" id="count">0</div>
+    <div class="muted" id="lastWater"></div>
+  </div>
+  <div class="card two">
+    <div class="label">Recent waterings</div>
+    <ul id="waterList"><li class="muted">none yet</li></ul>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function ago(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h " + Math.floor((s % 3600) / 60) + " min ago";
+  return Math.floor(s / 86400) + " d " + Math.floor((s % 86400) / 3600) + " h ago";
+}
+const fmt = (t) => new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function drawChart(h) {
+  const box = $("chart");
+  if (!h.length) { box.innerHTML = '<p class="muted">No readings yet</p>'; return; }
+  const W = box.clientWidth || 600, H = 280, L = 40, R = 10, T = 10, B = 26;
+  const t0 = h[0].t, t1 = h[h.length - 1].t || t0 + 1, span = Math.max(1, t1 - t0);
+  const X = (t) => L + (W - L - R) * (t - t0) / span;
+  const Y = (v) => T + (H - T - B) * (1 - v / 100);
+  let s = '<svg width="' + W + '" height="' + H + '" role="img" aria-label="Moisture chart">';
+  [0, 25, 50, 75, 100].forEach((v) => {
+    s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="#e3efe5"/>';
+    s += '<text x="' + (L - 6) + '" y="' + (Y(v) + 4) + '" font-size="11" fill="#5e7a66" text-anchor="end">' + v + '%</text>';
+  });
+  const pts = h.map((r) => X(r.t).toFixed(1) + "," + Y(r.pct).toFixed(1));
+  s += '<polygon points="' + X(t0) + "," + Y(0) + " " + pts.join(" ") + " " + X(t1) + "," + Y(0) + '" fill="rgba(78,159,61,.12)"/>';
+  s += '<polyline points="' + pts.join(" ") + '" fill="none" stroke="#4e9f3d" stroke-width="2"/>';
+  const step = Math.max(1, Math.ceil(h.length / 300));
+  h.forEach((r, i) => { if (i % step === 0 || i === h.length - 1)
+    s += '<circle cx="' + X(r.t) + '" cy="' + Y(r.pct) + '" r="2.5" fill="' + (r.dry ? "#e7859c" : "#4e9f3d") + '"><title>' + hhmm(r.t) + " · " + r.pct + "%</title></circle>"; });
+  for (let k = 0; k <= 4; k++) {
+    const t = t0 + span * k / 4;
+    s += '<text x="' + X(t) + '" y="' + (H - 6) + '" font-size="11" fill="#5e7a66" text-anchor="' + (k === 0 ? "start" : k === 4 ? "end" : "middle") + '">' + hhmm(t) + "</text>";
+  }
+  box.innerHTML = s + "</svg>";
+}
+
+function render(d) {
+  const st = $("status");
+  st.className = "pill " + (d.online ? "on" : "off");
+  $("statusText").textContent = d.latest
+    ? (d.online ? "Online · updated " : "Offline · last seen ") + ago(d.now - d.latest.t)
+    : "Waiting for Mimi's first reading";
+
+  if (d.latest) {
+    const L = d.latest;
+    $("face").textContent = L.dry ? "\u{1F622}" : "\u{1F60A}";
+    $("moodText").textContent = L.dry ? "Thirsty: the soil is dry" : "Happy: the soil is wet";
+    $("pct").textContent = L.pct + "%";
+    $("fill").style.width = L.pct + "%";
+    $("raw").textContent = "Raw reading " + L.raw + " of 4095";
+  }
+
+  const a = d.alert || {};
+  const card = $("alertCard");
+  if (a.alerted) {
+    card.className = "card alert"; $("alertBig").textContent = "Sent";
+    $("alertText").textContent = "Dry since " + fmt(a.dryStart) + ". Notification sent.";
+  } else if (a.dryStart) {
+    card.className = "card alert"; $("alertBig").textContent = "Dry";
+    const left = Math.max(0, d.alertAfterMin - Math.floor((d.now - a.dryStart) / 60000));
+    $("alertText").textContent = "Alert in about " + left + " min if not watered.";
+  } else {
+    card.className = "card ok"; $("alertBig").textContent = "All good";
+    $("alertText").textContent = "Alert fires after " + d.alertAfterMin + " min of dry soil.";
+  }
+
+  $("count").textContent = d.waterCount;
+  $("lastWater").textContent = d.waterings.length ? "Last: " + ago(d.now - d.waterings[0]) : "No waterings yet";
+  $("waterList").innerHTML = d.waterings.length
+    ? d.waterings.map((t) => "<li>" + fmt(t) + "</li>").join("")
+    : '<li class="muted">none yet</li>';
+
+  drawChart(d.history);
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/data", { cache: "no-store" });
+    render(await r.json());
+  } catch (e) {
+    $("statusText").textContent = "Can't reach the cloud API";
+  }
+}
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
